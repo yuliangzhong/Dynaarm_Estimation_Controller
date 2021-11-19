@@ -13,39 +13,47 @@ class Agent:
         # listeners and publishers
         self.listener = tf.TransformListener()
         self.eeframe_pub = rospy.Publisher('/dynaarm/poseCommand', PoseStamped, queue_size=1)
-        self.ft_sub = rospy.Subscriber('/fts_readings', WrenchStamped, self.contact_analyze, queue_size=1)
+        self.ft_sub = rospy.Subscriber('/dynaarm/state/sensed_force', WrenchStamped, self.contact_analyze, queue_size=1)
+        
+        # self.ft_sub = rospy.Subscriber('/fts_readings', WrenchStamped, self.contact_analyze, queue_size=1)
+
         self.contact_pub = rospy.Publisher('/a_if_contact', Bool, queue_size=1)
 
         # base_height
         self.h = -0.085
 
         # start from
-        self.start_pos = [0.3, 0.0, 0.05 + self.h]
+        self.start_pos = [0.45, 0.0, 0.085 + self.h]
         self.start_rot = [0.0, 0.0, 0.0, 1.0]
-
+        self.startFrom_sleep = 0.1 # 0.01 for sim; 0.1 for real-world
         # interpolate pos dev & rot dev[rad]
-        self.dpos = 0.02
-        self.drot = 0.02
+        self.dpos = 0.001
+        self.drot = 0.001
 
         # contact detect
-        self.gravity = np.array([0,0,-12.9]) # in frame: /world
-        self.dNorm_threshold = 0.99 #[N]
+        self.gravity = np.array([0, 0, 0]) # in frame: /world
+        self.dNorm_threshold = [1.5, 2.5] #[N]
+        # if contacted (true), D<0.3 --> false
+        # if not contacted (false), D>0.6 --> true
         self.ifContact = False
-        # self.contact_info_updated = False
 
         # simple publish
         self.goal = np.zeros(3) # in /world frame
-        self.y_angle = 0.0
-
-        # estimation params
-        self.speed = 0.025
-        self.delta_t = 0.1 # sleep time (ros_second)
-        self.rotate_sleep_time = 0.15/2
-        self.impedance_ctrl_Dz = 0.05-0.085
+        self.y_angle = 0.0      # in /world frame
+        self.speed = 0.006 # 0.025
+        self.delta_t = 0.0025 # touching sleep time (ros_second)
         self.omega = 0.04 # about *rad/step
+
+        # lift height
+        self.impd_z = 0.09 + self.h
+
+        # count
+        self.n = 0
 
 
     def contact_analyze(self,msg):
+        self.n += 1
+
         while(True):
             try:
                 (trans, rot) = self.listener.lookupTransform('/ftSensor','/world',rospy.Time(0))
@@ -54,20 +62,26 @@ class Agent:
                 break
             except(tf.LookupException, tf.ConnectivityException, tf.ExtrapolationException):
                 continue
-
+            
         G = Rot.rotation_matrix.dot(self.gravity) # gravity in FT frame
         F = np.array([msg.wrench.force.x, msg.wrench.force.y, msg.wrench.force.z]) # FT reading
 
-        # print(np.linalg.norm(F-G))
-        if(np.linalg.norm(F-G) > self.dNorm_threshold):
+        # Prior based threshold
+        if(self.ifContact):
+            thres = self.dNorm_threshold[0]
+        else:
+            thres = self.dNorm_threshold[1]
+        
+        # if(self.n%200 == 0):
+        #     print(abs((F-G)[2])) # for testing
+
+        if(abs((F-G)[2]) > thres):
             self.contact_pub.publish(True)
             self.ifContact = True
         else:
             self.contact_pub.publish(False)
             self.ifContact = False
         
-        # self.contact_info_updated = True
-
     def get_current_pose(self):
         while(True):
             try:
@@ -107,7 +121,7 @@ class Agent:
             command.pose.orientation.z = q[3]
             command.pose.orientation.w = q[0]
             self.eeframe_pub.publish(command)
-            rospy.sleep(0.1)
+            rospy.sleep(self.startFrom_sleep)
         rospy.sleep(2) # wait for damping
 
     # just publish pose goal defined by self.goal and self.y_angle
@@ -124,50 +138,39 @@ class Agent:
         command.pose.orientation.z = xyz[2]
         command.pose.orientation.w = w
         self.eeframe_pub.publish(command)
-        # self.contact_info_updated = False
     
-    def goDown(self):
+    def goDown_and_Up(self):
         self.goal, _ = self.get_current_pose()
-        # print("start go down, current pos = ",self.goal)
         while(not self.ifContact):
             self.goal[2] -= self.speed*self.delta_t
             self.simplePublish()
             rospy.sleep(self.delta_t)
-            # while(not self.contact_info_updated):
-            #     if(rospy.is_shutdown()):
-            #         sys.exit()              # to exit smoothly
-            #     # wait here
-        self.goal[2] -= 0.02 # maintain >1N contact force 
+        self.goal[2] -= 0.025 # maintain >1N contact force 
         self.simplePublish()
-        rospy.sleep(self.rotate_sleep_time)
-    
-    def goUp(self):
-        self.goal, _ = self.get_current_pose()
-        # print("start go up, current pos = ",self.goal)
-        while(self.goal[2]<self.impedance_ctrl_Dz):
+
+        self.goal[2] += 0.02 # recover 
+        while(self.goal[2] < self.impd_z):
             self.goal[2] += self.speed*self.delta_t
             self.simplePublish()
-            rospy.sleep(self.delta_t)
+            rospy.sleep(self.delta_t/2)
         rospy.sleep(2) # wait for damping
 
 
     def Rotate(self,dir='left', steps=10):
         self.startFrom()
         self.y_angle = 0.0
+        self.goDown_and_Up()
 
         for i in range(steps):
-            if(dir=='left'):
-                self.y_angle += self.omega
-            else:
-                self.y_angle -= self.omega
-            # while(not self.contact_info_updated):
-            #     pass # wait here
-            self.simplePublish()
-            rospy.sleep(0.5)
-            self.goDown()
-            self.goUp()
-            
-
+            for j in range(40):
+                if(dir=='left'):
+                    self.y_angle += self.drot
+                else:
+                    self.y_angle -= self.drot
+                self.simplePublish()
+                rospy.sleep(0.1)
+            rospy.sleep(1)
+            self.goDown_and_Up()
 
 if __name__ == "__main__":
 
@@ -177,18 +180,30 @@ if __name__ == "__main__":
     agent = Agent()
 
     print("Press any key to continue...")
-    k = input()
+    
+    try:
+        k = input()
+    except KeyboardInterrupt:
+        pass
 
     agent.startFrom()
 
     print("Press any key to continue...")
-    k = input()
-    
-    agent.goDown()
-    agent.goUp()
-    for _ in range(3):
-        agent.Rotate('left',10)
-        agent.Rotate('right',10)
 
-    rospy.spin()
+    try:
+        k = input()
+    except KeyboardInterrupt:
+        pass
+    
+    # agent.goDown_and_Up()
+
+    for _ in range(3):
+        print("right starts")
+        agent.Rotate('right',10)
+        print("left starts")
+        agent.Rotate('left',10)
+    
+    print("All done!")
+
+    # rospy.spin()
 
