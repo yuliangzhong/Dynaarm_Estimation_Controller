@@ -1,0 +1,38 @@
+topics to record. Please make sure that the /log/model/meas/pos/ topics publish the joint positions just to be sure of that !
+
+rosbag record \
+/dynaarm/poseCommand \
+/dynaarm/state/impedance_force_cmd\
+/dynaarm/state/pose\
+/dynaarm/state/sensed_force\
+/log/model/meas/pos/EL_FLE\
+/log/model/meas/pos/FA_ROT\
+/log/model/meas/pos/SH_FLE\
+/log/model/meas/pos/SH_ROT\
+/log/model/meas/pos/WRIST_1\
+/log/model/meas/pos/WRIST_2\
+/tf\
+/tf_static\
+/rokubimini_cosmo/ft_sensor/readings\
+/rokubimini_cosmo/ft_sensor/wrench\
+/rokubimini_cosmo/wrench_sensor_gravity_compensated
+
+
+COPY AND PASTE BELOW:
+#######################
+rosbag record /a_if_contact /dynaarm/state/pose /dynaarm/poseCommand /dynaarm/state/impedance_force_cmd /dynaarm/state/sensed_force /tf /tf_static /rokubimini_cosmo/ft_sensor/readings /rokubimini_cosmo/ft_sensor/wrench /rokubimini_cosmo/wrench_sensor_gravity_compensated
+#######################
+
+#######################
+ATTENTION:
+1. record after "startfrom()"
+2. leave blank time before touch, for subscriber connecting
+3. record ft_sensor readings!!  /dynaarm/state/sensed_force??
+4. quick up quick down
+#######################
+11.19数据
+从gripper往下23cm起算
+往x偏2mm，往z偏-6mm，往y轴偏转7度；很不规范
+平面的位置也要量一下：从平面起算，到桌面2.3cm，到base中部9cm，到base顶部14cm
+最后一个bag是从0.085起的；倒数第二个bag是从0.10起的
+
