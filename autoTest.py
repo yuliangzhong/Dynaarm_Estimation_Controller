@@ -1,10 +1,14 @@
 import os
-import sys
 import ruamel.yaml
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
+import math
 
+ifSim = True
+ifFast = True
+edge = 2
 
 YAMLpath = "sp_ws/src/state_estimation_rai/state_estimation_rai_problems/config/grasped_object_sim/ros.yaml"
 configFile = "config.csv"
@@ -31,11 +35,16 @@ def setRotMean(yr):
 
 if __name__ == "__main__":
 
-    testNum = 1000
-    testStamp = np.random.rand()
+    ## Ground Truth ##
+    ####################################
+    x_pos = 0.001
+    z_pos = -0.005
+    y_r = -4    
 
     ## Plot Setting ##
     ####################################
+    figure = plt.gcf() # get current figure
+    figure.set_size_inches(16, 7)
     axis1 = plt.subplot(1,2,1)
     axis2 = plt.subplot(1,2,2)
 
@@ -43,66 +52,114 @@ if __name__ == "__main__":
     axis1.set_title('Initial Guess Distribution: Position')
     axis1.set_xlabel('x pos [m]')
     axis1.set_ylabel('z pos [m]')
-    axis1.set_xlim([0.001-range1, 0.001+range1])
-    axis1.set_ylim([-0.005-range1, -0.005+range1])
+    # axis1.set_xlim([x_pos-range1, x_pos+range1])
+    # axis1.set_ylim([z_pos-range1, z_pos+range1])
     axis1.set_aspect('equal', adjustable='box')
 
 
     axis2.set_title('Initial Guess Distribution: Rotation')
     axis2.set_xlabel('y rotation [degree]')
     axis2.set_ylabel('y rotation distribution')
-    axis2.set_xlim([-11, +3])
-    axis2.set_yticks([])
-    ylim2 = 23.5
+    # axis2.set_xlim([-7, -1])
+    ylim2 = 8
+    
     axis2.set_ylim([0,ylim2])
+    axis2.set_yticks([])
 
     ## Initial Position ##
     ####################################
     Var_pos = 0.005
-    meansX = np.random.normal(0.001,0.004,testNum)
-    meansZ = np.random.normal(-0.005,0.004,testNum)
+    meansX = np.linspace(-0.010+x_pos, 0.010+x_pos, edge).tolist()
+    meansZ = np.linspace(-0.010+z_pos, 0.010+z_pos, edge).tolist()
+    meansXZ = np.zeros([edge*edge,2])
     
-    for i in range(testNum):
-        if((meansX[i]-0.001)**2 + (meansZ[i]+0.005)**2<0.008**2):
-            if np.random.rand()>0.2:
-                continue
-        circle = plt.Circle((meansX[i],meansZ[i]), Var_pos, color='red', edgecolor=None, alpha=0.05)
-        circle.set_zorder(0)
-        axis1.add_patch(circle)
+    for i in range(edge):
+        for j in range(edge):
+            meansXZ[i*edge+j][0] = meansX[i]
+            meansXZ[i*edge+j][1] = meansZ[j]
+            circle = plt.Circle((meansX[i],meansZ[j]), Var_pos, color='red', edgecolor=None, alpha=0.05)
+            circle.set_zorder(0)
+            axis1.add_patch(circle)
 
+    for i in range(edge):
+        pos = axis1.scatter(meansX[i]*np.ones(edge),meansZ, s=5, color='black',alpha=0.8)
+        pos.set_zorder(1)
 
-    pos = axis1.scatter(meansX,meansZ, s=5, color='black',alpha=0.8)
-    pos.set_zorder(1)
-
-    gt = plt.Circle((0.001,-0.005), 0.001/3, color='blue', edgecolor=None, alpha=0.8)
-    gt.set_zorder(2)
+    gt = plt.Circle((x_pos,z_pos), 0.001/3, color='blue', edgecolor=None, alpha=0.8)
+    gt.set_zorder(5)
     axis1.add_patch(gt)
 
-    axis1.legend(handles=[pos,circle,gt],labels=['initial pos guess mean','initial pos guess distribution (1$\sigma$)', 'ground truth'],loc='best')
-
-    # ## Initial Rotation ##
-    # ####################################
+    ## Initial Rotation ##
+    ####################################
     Var_rot = 5
-    meansY = np.random.normal(-4,2,testNum)
-    N, bins, patches = axis2.hist(meansY,bins=200, color='red', alpha=0.5)
+    meansY = np.random.uniform(y_r-2,y_r+2,edge**2)
+    N, bins, patches = axis2.hist(meansY,bins=100, color='black')
+    
+    rgt = axis2.plot([y_r,y_r],[0,ylim2],c='b', alpha=0.8)
 
-    zeros = np.zeros(testNum)
-    y_rots = axis2.scatter(meansY,zeros, s=15, color='black',alpha=0.8)
-    y_rots.set_zorder(5)
+    ## Save figure ##
+    ####################################    
+    plt.savefig('prior.png', dpi=200)
+    
+    ## Write down initial guesses ##
+    ####################################    
+    pd.DataFrame({'meansX':meansXZ[:,0], 'meansZ':meansXZ[:,1], 'meansY':meansY}).to_csv(configFile, index=False, float_format='%.5f')
 
-    rgt = axis2.plot([-4,-4],[0,ylim2],c='b')
+    ## Start Auto Test ##
+    ####################################
+    meansY = (meansY/180*math.pi).tolist()
+    pd.DataFrame({'x_dev':[], 'z_dev':[], 'y_rot':[]}).to_csv('result.csv', index=False, float_format='%.5f')
 
-    axis2.legend(handles=[y_rots,Rectangle((0,0),1,1,color='red', alpha=0.5),Rectangle((0,0),1,1,color='blue')],labels=['initial rot guess mean','initial rot guess mean distribution', 'ground truth'],loc='best')
+    
+    for i in range(edge):
+        for j in range(edge):
+            setPositionMean(meansX[i],meansZ[j])
+            setRotMean(meansY[i*edge+j])
+            if(ifSim):
+                os.system("roslaunch state_estimation_rai_problems grasped_object_sim.launch")
+                axis1.set_title('[Sim] Estimation Distribution: Position')
+                axis2.set_title('[Sim] Estimation Distribution: Rotation')
+            elif(ifFast):
+                os.system("roslaunch state_estimation_rai_problems grasped_object_real_fast.launch")
+                axis1.set_title('[Real Fast mode] Estimation Distribution: Position')
+                axis2.set_title('[Real Fast mode] Estimation Distribution: Rotation')
+            else:
+                os.system("roslaunch state_estimation_rai_problems grasped_object_real.launch")
+                axis1.set_title('[Real] Estimation Distribution: Position')
+                axis2.set_title('[Real] Estimation Distribution: Rotation')
 
-    plt.savefig('test.pdf') # make it clear!!!!!!!!!!!!!
+    ## Data Analysis ##
+    #################################### 
+    results = np.loadtxt(resultFile,delimiter = ",",skiprows = 1)
+    
+    for i in range(edge*edge):
+        if((results[i,0]-x_pos)**2 + (results[i,1]-z_pos)**2 > 0.010**2):
+            pos_est_fail = axis1.scatter(results[i,0], results[i,1], s=100, color='red')
+            pos_old = axis1.scatter(meansXZ[i,0], meansXZ[i,1], s=100, color='red', marker='X')
+            pos_est_fail.set_zorder(3)
+            pos_old.set_zorder(3)
+        else:
+            pos_est = axis1.scatter(results[i,0], results[i,1], s=25, color='green')
+            pos_est.set_zorder(3)
+    
+    axis1.legend(handles=[pos,circle,gt,pos_est],
+                 labels=['initial pos guess mean','initial pos guess distribution (1$\sigma$)', 'ground truth','pos estimation result'],
+                 loc='best')
+
+
+    results[:,2] = results[:,2]/math.pi*180
+    for i in range(edge*edge):
+        y_degree = results[i,2]
+        if(y_degree>-1 or y_degree<-7):
+            rot_est = axis2.plot([y_degree,y_degree],[0,ylim2],c='red', alpha=0.8)
+        else:
+            rot_est = axis2.plot([y_degree,y_degree],[0,ylim2],c='green', alpha=0.8)
+
+    Handles = [Rectangle((0,0),1,1,color='black'),
+               Rectangle((0,0),1,1,color='blue', alpha=0.8),
+               Rectangle((0,0),1,1,color='green', alpha=0.8)]
+    Labels = ['initial rot guess mean', 'ground truth','rot estimation result']
+    axis2.legend(handles=Handles,labels=Labels,loc='best')
+    
+    plt.savefig('posterior.png', dpi=200)
     plt.show()
-
-
-
-
-    # for i in range(testNum):
-    #     os.system("roslaunch state_estimation_rai_problems grasped_object_sim.launch")
-
-
-
-
